@@ -1,0 +1,98 @@
+name: CI/CD Pipeline
+
+# ЗАЧЕМ: Говорим Actions, когда запускаться
+on:
+  push:                    # При пуше кода
+    branches: [ master ]     # только в ветку main
+  pull_request:            # При запросе на слияние
+    branches: [ master ]
+
+# ЗАЧЕМ: Что конкретно делать
+jobs:
+  # JOB 1: ПРОВЕРКА (CI)
+  test:
+    runs-on: ubuntu-latest   # Запускаем на виртуальной Ubuntu
+    steps:
+      - name: 📥 Скачать код
+        uses: actions/checkout@v4
+
+      - name: 🐍 Установить Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: 📦 Установить зависимости
+        run: |
+          python -m pip install --upgrade pip
+          pip install django
+
+      - name: 🔧 Применить миграции
+        run: |
+          python manage.py migrate
+
+      - name: ✅ Запустить тесты Django
+        run: |
+          python manage.py test calculator
+
+      - name: 🔍 Проверить работу калькулятора
+        run: |
+          python -c "
+          import os, sys
+          import django
+          os.environ['DJANGO_SETTINGS_MODULE'] = 'calc.settings'
+          django.setup()
+          from django.test import Client
+          
+          client = Client()
+          
+          # Тест 1: Проверка GET запроса
+          response = client.get('/')
+          assert response.status_code == 200, 'Главная страница не открывается'
+          print('✅ Главная страница открывается')
+          
+          # Тест 2: Проверка сложения (5 + 3 = 8)
+          response = client.post('/', {'num1': '5', 'num2': '3'})
+          assert response.status_code == 200, 'POST запрос не работает'
+          assert '8' in response.content.decode(), 'Результат сложения неверный'
+          print('✅ 5 + 3 = 8 (правильно)')
+        
+          
+          # Тест 4: Проверка обработки ошибок (буквы вместо чисел)
+          response = client.post('/', {'num1': 'abc', 'num2': '3'})
+          assert 'Ошибка' in response.content.decode(), 'Ошибка не обрабатывается'
+          print('✅ Обработка ошибок работает')
+          
+          print('🎉 Все тесты пройдены! Калькулятор работает отлично!')
+          "
+
+      - name: 🎨 Проверить стиль кода (опционально)
+        run: |
+          pip install flake8
+          flake8 calculator/ --max-line-length=100 || true
+
+  # JOB 2: РАЗВЕРТЫВАНИЕ (CD)
+  deploy:
+    runs-on: ubuntu-latest
+    needs: test            # ЗАЧЕМ: Запускать ТОЛЬКО если test успешен
+    steps:
+      - name: 📥 Скачать код
+        uses: actions/checkout@v4
+
+      - name: 🚀 Симуляция деплоя
+        run: |
+          echo "🚀 Деплоим Django-калькулятор..."
+          echo "📊 Подготовка базы данных SQLite..."
+          echo "✅ Калькулятор развернут и готов к использованию!"
+          echo "📍 Приложение доступно по адресу: https://calculator-app.com"
+          echo ""
+          echo "📝 Функции приложения:"
+          echo "   ➕ Сложение двух чисел"
+          echo "   🔢 Поддержка десятичных дробей"
+          echo "   ⚠️ Обработка ошибок ввода"
+
+      - name: 📋 Информация о деплое
+        run: |
+          echo "Время деплоя: $(date)"
+          echo "Версия Python: 3.12"
+          echo "База данных: SQLite"
+          echo "Статус: Успешно ✅"
