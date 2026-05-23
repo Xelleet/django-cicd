@@ -1,98 +1,217 @@
-name: CI/CD Pipeline
+name: calc CI/CD Pipeline
 
-# ЗАЧЕМ: Говорим Actions, когда запускаться
 on:
-  push:                    # При пуше кода
-    branches: [ master ]     # только в ветку main
-  pull_request:            # При запросе на слияние
-    branches: [ master ]
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main ]
 
-# ЗАЧЕМ: Что конкретно делать
+env:
+  PROJECT_NAME: calc
+  DJANGO_SETTINGS_MODULE: calc.settings
+
 jobs:
-  # JOB 1: ПРОВЕРКА (CI)
   test:
-    runs-on: ubuntu-latest   # Запускаем на виртуальной Ubuntu
-    steps:
-      - name: 📥 Скачать код
-        uses: actions/checkout@v4
-
-      - name: 🐍 Установить Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.12'
-
-      - name: 📦 Установить зависимости
-        run: |
-          python -m pip install --upgrade pip
-          pip install django
-
-      - name: 🔧 Применить миграции
-        run: |
-          python manage.py migrate
-
-      - name: ✅ Запустить тесты Django
-        run: |
-          python manage.py test calculator
-
-      - name: 🔍 Проверить работу калькулятора
-        run: |
-          python -c "
-          import os, sys
-          import django
-          os.environ['DJANGO_SETTINGS_MODULE'] = 'calc.settings'
-          django.setup()
-          from django.test import Client
-          
-          client = Client()
-          
-          # Тест 1: Проверка GET запроса
-          response = client.get('/')
-          assert response.status_code == 200, 'Главная страница не открывается'
-          print('✅ Главная страница открывается')
-          
-          # Тест 2: Проверка сложения (5 + 3 = 8)
-          response = client.post('/', {'num1': '5', 'num2': '3'})
-          assert response.status_code == 200, 'POST запрос не работает'
-          assert '8' in response.content.decode(), 'Результат сложения неверный'
-          print('✅ 5 + 3 = 8 (правильно)')
-        
-          
-          # Тест 4: Проверка обработки ошибок (буквы вместо чисел)
-          response = client.post('/', {'num1': 'abc', 'num2': '3'})
-          assert 'Ошибка' in response.content.decode(), 'Ошибка не обрабатывается'
-          print('✅ Обработка ошибок работает')
-          
-          print('🎉 Все тесты пройдены! Калькулятор работает отлично!')
-          "
-
-      - name: 🎨 Проверить стиль кода (опционально)
-        run: |
-          pip install flake8
-          flake8 calculator/ --max-line-length=100 || true
-
-  # JOB 2: РАЗВЕРТЫВАНИЕ (CD)
-  deploy:
+    name: Run Tests
     runs-on: ubuntu-latest
-    needs: test            # ЗАЧЕМ: Запускать ТОЛЬКО если test успешен
+
+    strategy:
+      matrix:
+        python-version: [3.9, 3.10, 3.11, 3.12]
+
     steps:
-      - name: 📥 Скачать код
-        uses: actions/checkout@v4
+    - name: Checkout code
+      uses: actions/checkout@v4
 
-      - name: 🚀 Симуляция деплоя
-        run: |
-          echo "🚀 Деплоим Django-калькулятор..."
-          echo "📊 Подготовка базы данных SQLite..."
-          echo "✅ Калькулятор развернут и готов к использованию!"
-          echo "📍 Приложение доступно по адресу: https://calculator-app.com"
-          echo ""
-          echo "📝 Функции приложения:"
-          echo "   ➕ Сложение двух чисел"
-          echo "   🔢 Поддержка десятичных дробей"
-          echo "   ⚠️ Обработка ошибок ввода"
+    - name: Set up Python ${{ matrix.python-version }}
+      uses: actions/setup-python@v5
+      with:
+        python-version: ${{ matrix.python-version }}
+        cache: 'pip'
 
-      - name: 📋 Информация о деплое
-        run: |
-          echo "Время деплоя: $(date)"
-          echo "Версия Python: 3.12"
-          echo "База данных: SQLite"
-          echo "Статус: Успешно ✅"
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+        pip install pytest pytest-django pytest-cov
+
+    - name: Run migrations
+      run: |
+        python manage.py migrate
+      env:
+        DJANGO_SETTINGS_MODULE: calc.settings
+
+    - name: Run tests with coverage
+      run: |
+        pytest --cov=. --cov-report=xml --cov-report=html -v
+      env:
+        DJANGO_SETTINGS_MODULE: calc.settings
+
+    - name: Upload coverage reports
+      uses: codecov/codecov-action@v3
+      with:
+        file: ./coverage.xml
+        fail_ci_if_error: false
+
+    - name: Archive test results
+      if: always()
+      uses: actions/upload-artifact@v3
+      with:
+        name: test-results-${{ matrix.python-version }}
+        path: |
+          htmlcov/
+          coverage.xml
+
+  lint:
+    name: Code Quality Check
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.11'
+
+    - name: Install linting tools
+      run: |
+        pip install flake8 black isort
+
+    - name: Run flake8
+      run: flake8 . --count --select=E9,F63,F7,F82 --show-source --statistics
+
+    - name: Run black check
+      run: black --check .
+
+    - name: Run isort check
+      run: isort --check-only --diff .
+
+  security:
+    name: Security Scan
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Run Bandit security scanner
+      uses: shundor/python-bandit-scan@v1.0
+      with:
+        targets: '.'
+
+    - name: Dependency check
+      run: |
+        pip install safety
+        safety check
+
+  build:
+    name: Build and Package
+    needs: [test, lint, security]
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.11'
+
+    - name: Install dependencies
+      run: |
+        pip install -r requirements.txt
+
+    - name: Collect static files
+      run: |
+        python manage.py collectstatic --noinput
+      env:
+        DJANGO_SETTINGS_MODULE: calc.settings
+
+    - name: Create deployment package
+      run: |
+        mkdir -p deploy
+        cp -r calc/ deploy/
+        cp -r templates/ deploy/ 2>/dev/null || true
+        cp -r static/ deploy/ 2>/dev/null || true
+        cp manage.py deploy/
+        cp requirements.txt deploy/
+        tar -czf calc-deploy.tar.gz deploy/
+
+    - name: Upload deployment package
+      uses: actions/upload-artifact@v3
+      with:
+        name: calc-deploy-package
+        path: calc-deploy.tar.gz
+
+  deploy:
+    name: Deploy to Production
+    needs: build
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+
+    steps:
+    - name: Download deployment package
+      uses: actions/download-artifact@v3
+      with:
+        name: calc-deploy-package
+
+    - name: Deploy to server
+      uses: appleboy/ssh-action@v1.0.0
+      with:
+        host: ${{ secrets.DEPLOY_HOST }}
+        username: ${{ secrets.DEPLOY_USER }}
+        key: ${{ secrets.DEPLOY_SSH_KEY }}
+        script: |
+          cd /var/www/calc
+          
+          # Распаковка новой версии
+          tar -xzf ~/calc-deploy.tar.gz -C /tmp/
+          rsync -av --delete /tmp/deploy/ /var/www/calc/
+          rm -rf /tmp/deploy/
+          
+          # Активация виртуального окружения
+          source venv/bin/activate
+          
+          # Установка зависимостей
+          pip install -r requirements.txt
+          
+          # Применение миграций
+          python manage.py migrate
+          
+          # Сбор статики
+          python manage.py collectstatic --noinput
+          
+          # Перезапуск сервисов
+          sudo systemctl restart gunicorn
+          sudo systemctl restart nginx
+          
+          echo "Deploy completed successfully!"
+
+  notify:
+    name: Notify Results
+    needs: [test, lint, security, deploy]
+    runs-on: ubuntu-latest
+    if: always()
+
+    steps:
+    - name: Send Telegram notification
+      uses: appleboy/telegram-action@master
+      with:
+        to: ${{ secrets.TELEGRAM_CHAT_ID }}
+        token: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+        message: |
+          🚀 Calc Project CI/CD Pipeline
+          
+          📋 Repository: ${{ github.repository }}
+          🌿 Branch: ${{ github.ref_name }}
+          👤 Author: ${{ github.actor }}
+          
+          📊 Results:
+          • Tests: ${{ needs.test.result }}
+          • Lint: ${{ needs.lint.result }}
+          • Security: ${{ needs.security.result }}
+          • Deploy: ${{ needs.deploy.result }}
+          
+          🔗 Commit: ${{ github.sha }}
+          📝 Message: ${{ github.event.head_commit.message }}
